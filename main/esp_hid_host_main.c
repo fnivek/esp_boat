@@ -28,7 +28,56 @@
 #include "esp_hidh.h"
 #include "esp_hid_gap.h"
 
+#include "driver/mcpwm.h"
+#include "soc/mcpwm_periph.h"
+
+//You can get these value from the datasheet of servo you use, in general pulse width varies between 1000 to 2000 mocrosecond
+#define SERVO_MIN_PULSEWIDTH 1000 //Minimum pulse width in microsecond
+#define SERVO_MAX_PULSEWIDTH 2000 //Maximum pulse width in microsecond
+#define SERVO_MAX_DEGREE 90       //Maximum angle in degree upto which servo can rotate
+
 static const char *TAG = "ESP_HIDH_DEMO";
+
+static void mcpwm_example_gpio_initialize(void)
+{
+    printf("initializing mcpwm servo control gpio......\n");
+    mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, 18); //Set GPIO 18 as PWM0A, to which servo is connected
+
+    // 2. initial mcpwm configuration
+    printf("Configuring Initial Parameters of mcpwm......\n");
+    mcpwm_config_t pwm_config;
+    pwm_config.frequency = 50; //frequency = 50Hz, i.e. for every servo motor time period should be 20ms
+    pwm_config.cmpr_a = 0;     //duty cycle of PWMxA = 0
+    pwm_config.cmpr_b = 0;     //duty cycle of PWMxb = 0
+    pwm_config.counter_mode = MCPWM_UP_COUNTER;
+    pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
+    mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config); //Configure PWM0A & PWM0B with above settings
+}
+
+/**
+ * @brief Use this function to calcute pulse width for per degree rotation
+ *
+ * @param  degree_of_rotation the angle in degree to which servo has to rotate
+ *
+ * @return
+ *     - calculated pulse width
+ */
+static uint32_t servo_per_degree_init(uint32_t degree_of_rotation)
+{
+    uint32_t cal_pulsewidth = 0;
+    cal_pulsewidth = (SERVO_MIN_PULSEWIDTH + (((SERVO_MAX_PULSEWIDTH - SERVO_MIN_PULSEWIDTH) * (degree_of_rotation)) / (SERVO_MAX_DEGREE)));
+    return cal_pulsewidth;
+}
+
+void set_pwm(uint32_t angle)
+{
+    if (angle > SERVO_MAX_DEGREE)
+    {
+        angle = SERVO_MAX_DEGREE;
+    }
+    uint32_t pulse_width = servo_per_degree_init(angle);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, pulse_width);
+}
 
 void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
@@ -65,21 +114,22 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id, void *
         if (param->input.data[0] & 0x1)
         {
             ESP_LOGI(TAG, "B is pressed");
-            gpio_set_level(18, 0);
+            set_pwm(SERVO_MAX_DEGREE);
         }
         if (param->input.data[0] & 0x2)
         {
             ESP_LOGI(TAG, "A is pressed");
-
-            gpio_set_level(18, 1);
+            set_pwm(0);
         }
         if (param->input.data[0] & 0x4)
         {
             ESP_LOGI(TAG, "Y is pressed");
+            gpio_set_level(19, 0);
         }
         if (param->input.data[0] & 0x8)
         {
             ESP_LOGI(TAG, "X is pressed");
+            gpio_set_level(19, 1);
         }
         break;
     }
@@ -175,10 +225,13 @@ void app_main(void)
     gpio_config_t io_conf;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = 1 << 18;
+    io_conf.pin_bit_mask = 1 << 19;
     io_conf.pull_down_en = false;
     io_conf.pull_up_en = false;
     gpio_config(&io_conf);
+    //1. mcpwm gpio initialization
+    ESP_LOGI(TAG, "setting up pwm");
+    mcpwm_example_gpio_initialize();
     ESP_LOGI(TAG, "setting hid gap, mode:%d", HID_HOST_MODE);
     ESP_ERROR_CHECK(esp_hid_gap_init(HID_HOST_MODE));
 #if CONFIG_BT_BLE_ENABLED
